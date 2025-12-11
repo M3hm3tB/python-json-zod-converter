@@ -1,3 +1,8 @@
 node_modules/
 dist/
 *.log
+
+# Keep example schemas but ignore auto-generated ones
+schemas/auto_schema.json
+schemas/auto_schema.zod.ts
+schemas/api_type_structure.json

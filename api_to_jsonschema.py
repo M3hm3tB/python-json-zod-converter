@@ -18,13 +18,13 @@ def ask_user_input():
 
 
 def determine_types(data):
-    """Rekursiv die Struktur durchlaufen und Typen bestimmen."""
+    """Recursively traverse the structure and determine types."""
     if isinstance(data, dict):
         return {key: determine_types(value) for key, value in data.items()}
 
     elif isinstance(data, list):
         if data:
-            return [determine_types(data[0])]  # Beispieltyp des 1. Elements
+            return [determine_types(data[0])]  # Example type of first element
         else:
             return ["empty_list"]
 
@@ -34,8 +34,8 @@ def determine_types(data):
 
 def infer_full_json_schema(data, key_descriptions=None):
     """
-    Erzeugt ein JSON-Schema ähnlich wie json_schema.json, inkl. type, properties, required, description.
-    key_descriptions kann ein dict mit Beschreibungen sein (optional).
+    Generate a JSON Schema similar to json_schema.json, including type, properties, required, description.
+    key_descriptions can be a dict with descriptions (optional).
     """
     if key_descriptions is None:
         key_descriptions = {}
@@ -44,9 +44,9 @@ def infer_full_json_schema(data, key_descriptions=None):
         required = []
         for k, v in data.items():
             props[k] = infer_full_json_schema(v, key_descriptions.get(k, {}))
-            # Platzhalter für description
+            # Placeholder for description
             if "description" not in props[k]:
-                props[k]["description"] = key_descriptions.get(k, "") or f"Beschreibung für {k}" 
+                props[k]["description"] = key_descriptions.get(k, "") or f"Description for {k}" 
             required.append(k)
         return {
             "type": "object",
@@ -62,21 +62,21 @@ def infer_full_json_schema(data, key_descriptions=None):
         else:
             return {"type": "array", "items": {}}
     elif isinstance(data, str):
-        return {"type": "string", "description": "String-Wert"}
+        return {"type": "string", "description": "String value"}
     elif isinstance(data, bool):
-        return {"type": "boolean", "description": "Boolescher Wert"}
+        return {"type": "boolean", "description": "Boolean value"}
     elif isinstance(data, int):
-        return {"type": "integer", "description": "Ganzzahl"}
+        return {"type": "integer", "description": "Integer value"}
     elif isinstance(data, float):
-        return {"type": "number", "description": "Dezimalzahl"}
+        return {"type": "number", "description": "Number value"}
     elif data is None:
-        return {"type": "null", "description": "Null-Wert"}
+        return {"type": "null", "description": "Null value"}
     else:
-        return {"type": "string", "description": "Unbekannter Typ"}
+        return {"type": "string", "description": "Unknown type"}
 
 
 def clean_ascii(text):
-    """Entfernt nicht-ASCII-Zeichen aus einem String."""
+    """Remove non-ASCII characters from a string."""
     return text.encode("ascii", "ignore").decode()
 
 
@@ -133,7 +133,10 @@ def main():
     # Schema speichern
     save_schema = input("\nMöchtest du das JSON-Schema speichern? (y/n): ").strip().lower()
     if save_schema == "y":
-        filename = "auto_schema.json"
+        import os
+        output_dir = "schemas"
+        os.makedirs(output_dir, exist_ok=True)
+        filename = os.path.join(output_dir, "auto_schema.json")
         with open(filename, "w", encoding="utf-8") as f:
             json.dump(schema, f, indent=2, ensure_ascii=False)
         print(f"💾 JSON-Schema gespeichert als {filename}")
@@ -165,7 +168,10 @@ def main():
     # Optional in Datei speichern
     save = input("\nMöchtest du die Typstruktur als JSON speichern? (y/n): ").strip().lower()
     if save == "y":
-        filename = "api_type_structure.json"
+        import os
+        output_dir = "schemas"
+        os.makedirs(output_dir, exist_ok=True)
+        filename = os.path.join(output_dir, "api_type_structure.json")
         with open(filename, "w", encoding="utf-8") as f:
             json.dump(type_structure, f, indent=2, ensure_ascii=False)
         print(f"💾 Gespeichert als {filename}")
