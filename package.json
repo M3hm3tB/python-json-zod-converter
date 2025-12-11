@@ -1,0 +1,17 @@
+{
+  "name": "json-to-zod-cli",
+  "version": "1.0.0",
+  "description": "CLI-Tool zum Konvertieren von JSON-Schema zu Zod-Schema",
+  "main": "JsonToZod.ts",
+  "scripts": {
+    "convert": "ts-node JsonToZod.ts"
+  },
+  "dependencies": {
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3"
+  }
+}

@@ -1,0 +1,138 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["schema_version", "uuid", "manufacturer", "name", "serial", "location", "chain_pitch_mm", "zones"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "description": "Schema version number"
+    },
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+      "description": "Unique machine UUID"
+    },
+    "manufacturer": {
+      "type": "string",
+      "description": "Oven manufacturer name"
+    },
+    "name": {
+      "type": "string",
+      "description": "Oven model name"
+    },
+    "serial": {
+      "type": "string",
+      "description": "Serial number"
+    },
+    "location": {
+      "type": "string",
+      "description": "Machine location"
+    },
+    "chain_pitch_mm": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Chain pitch in millimeters"
+    },
+    "peripherals": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "Assigned peripheral devices (UUID mapping)"
+    },
+    "extra_labels": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Additional configurable labels for sensors/actuators"
+    },
+    "zones": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "labels", "role", "length_mm", "left", "right", "vacuum"],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Zone ID"
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 2,
+            "maxItems": 2,
+            "description": "Labels for left and right side of the zone"
+          },
+          "role": {
+            "type": "string",
+            "enum": ["Dead Zone", "Zone Separator", "Preheat", "Soldering", "Cooling", "Half Zone"],
+            "description": "Zone function/role"
+          },
+          "length_mm": {
+            "type": "number",
+            "minimum": 0,
+            "description": "Zone length in millimeters"
+          },
+          "left": {
+            "type": "object",
+            "required": ["heater", "fan", "infrared"],
+            "properties": {
+              "heater": {
+                "type": "boolean",
+                "description": "Heater present (left side)"
+              },
+              "fan": {
+                "type": "boolean",
+                "description": "Fan present (left side)"
+              },
+              "infrared": {
+                "type": "boolean",
+                "description": "Infrared heater present (left side)"
+              }
+            }
+          },
+          "right": {
+            "type": "object",
+            "required": ["heater", "fan", "infrared"],
+            "properties": {
+              "heater": {
+                "type": "boolean",
+                "description": "Heater present (right side)"
+              },
+              "fan": {
+                "type": "boolean",
+                "description": "Fan present (right side)"
+              },
+              "infrared": {
+                "type": "boolean",
+                "description": "Infrared heater present (right side)"
+              }
+            }
+          },
+          "vacuum": {
+            "type": "boolean",
+            "description": "Vacuum present"
+          }
+        }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Configuration creation timestamp"
+        },
+        "author": {
+          "type": "string",
+          "description": "Configuration author"
+        }
+      }
+    }
+  }
+}
