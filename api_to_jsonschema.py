@@ -2,11 +2,11 @@ import json
 import requests
 
 def ask_user_input():
-    base_url = input("Bitte die API-URL eingeben (z.B. http://localhost): ").strip()
-    port = input("Bitte Port eingeben (z.B. 8080): ").strip()
-    endpoint = input("Bitte den API-Endpunkt eingeben (z.B. /api/data): ").strip()
+    base_url = input("Please enter the API URL (e.g. http://localhost): ").strip()
+    port = input("Please enter the port (e.g. 8080): ").strip()
+    endpoint = input("Please enter the API endpoint (e.g. /api/data): ").strip()
 
-    params_raw = input("Optionale Query-Parameter als key=value,key2=value2: ").strip()
+    params_raw = input("Optional query parameters as key=value,key2=value2: ").strip()
     params = {}
 
     if params_raw:
@@ -24,12 +24,139 @@ def determine_types(data):
 
     elif isinstance(data, list):
         if data:
-            return [determine_types(data[0])]  # Example type of first element
+            # Analyze all elements and collect types
+            all_types = {}
+            for item in data:
+                item_type = determine_types(item)
+                if isinstance(item_type, dict):
+                    for k, v in item_type.items():
+                        if k not in all_types:
+                            all_types[k] = set()
+                        if isinstance(v, str):
+                            all_types[k].add(v)
+                        else:
+                            all_types[k].add(str(v))
+            if all_types:
+                # Return first element as representative
+                return [determine_types(data[0])]
+            else:
+                return [determine_types(data[0])]
         else:
             return ["empty_list"]
 
     else:
         return type(data).__name__
+
+
+def merge_schemas(schemas):
+    """Merge multiple schemas and determine common required fields, recursively for nested objects."""
+    if not schemas:
+        return {}
+    
+    # Collect all properties and their types
+    all_props = {}
+    prop_counts = {}
+    total_count = len(schemas)
+    
+    for schema in schemas:
+        if "properties" in schema:
+            for key, value in schema["properties"].items():
+                if key not in all_props:
+                    all_props[key] = []
+                    prop_counts[key] = 0
+                all_props[key].append(value)
+                prop_counts[key] += 1
+    
+    # Create merged properties
+    merged_props = {}
+    for key, schemas_list in all_props.items():
+        # If field is not present everywhere, it is nullable
+        is_optional = prop_counts[key] < total_count
+        
+        # Collect types
+        types = set()
+        nullable = False
+        descriptions = set()
+        all_objects = []
+        
+        for s in schemas_list:
+            if "type" in s:
+                s_type = s["type"]
+                if s_type == "null":
+                    nullable = True
+                elif isinstance(s_type, list):
+                    # Multi-type wie ["string", "null"]
+                    for t in s_type:
+                        if t == "null":
+                            nullable = True
+                        else:
+                            types.add(t)
+                else:
+                    types.add(s_type)
+                
+                # If type is "object", collect for recursive merging
+                if s_type == "object" and "properties" in s:
+                    all_objects.append(s)
+            
+            if "description" in s:
+                descriptions.add(s["description"])
+        
+        if is_optional:
+            nullable = True
+        
+        # Case 1: All are objects -> merge recursively
+        if len(types) == 1 and "object" in types and len(all_objects) > 0:
+            # Recursively merge the nested objects
+            merged_nested = merge_schemas(all_objects)
+            merged_props[key] = merged_nested
+            
+            if "description" not in merged_props[key]:
+                if descriptions:
+                    merged_props[key]["description"] = list(descriptions)[0]
+                else:
+                    merged_props[key]["description"] = f"Description for {key}"
+            
+            if nullable:
+                merged_props[key]["type"] = ["object", "null"]
+                if "(optional/nullable)" not in merged_props[key].get("description", ""):
+                    merged_props[key]["description"] += " (optional/nullable)"
+        
+        # Case 2: Single type, not nullable
+        elif len(types) == 1 and not nullable:
+            merged_props[key] = schemas_list[0].copy()
+        
+        # Case 3: Single type, nullable
+        elif len(types) == 1 and nullable:
+            merged_props[key] = schemas_list[0].copy()
+            single_type = list(types)[0]
+            merged_props[key]["type"] = [single_type, "null"]
+            if descriptions:
+                merged_props[key]["description"] = list(descriptions)[0] + " (optional/nullable)"
+        
+        # Case 4: Multiple types
+        elif len(types) > 1:
+            merged_props[key] = {
+                "anyOf": [{"type": t} for t in sorted(types)],
+                "description": ", ".join(descriptions) if descriptions else f"Multiple types for {key}"
+            }
+            if nullable:
+                merged_props[key]["anyOf"].append({"type": "null"})
+        
+        # Case 5: Only null
+        else:
+            merged_props[key] = schemas_list[0].copy()
+    
+    # Required are only fields that appear in ALL elements
+    required = [key for key, count in prop_counts.items() if count == total_count]
+    
+    result = {
+        "type": "object",
+        "properties": merged_props
+    }
+    if required:
+        result["required"] = required
+    
+    return result
 
 
 def infer_full_json_schema(data, key_descriptions=None):
@@ -55,10 +182,21 @@ def infer_full_json_schema(data, key_descriptions=None):
         }
     elif isinstance(data, list):
         if data:
-            return {
-                "type": "array",
-                "items": infer_full_json_schema(data[0], key_descriptions)
-            }
+            # Analyze ALL array elements, not just the first one
+            if all(isinstance(item, dict) for item in data):
+                # All elements are objects -> merge schemas
+                schemas = [infer_full_json_schema(item, key_descriptions) for item in data]
+                merged = merge_schemas(schemas)
+                return {
+                    "type": "array",
+                    "items": merged
+                }
+            else:
+                # Mixed or primitive types
+                return {
+                    "type": "array",
+                    "items": infer_full_json_schema(data[0], key_descriptions)
+                }
         else:
             return {"type": "array", "items": {}}
     elif isinstance(data, str):
@@ -82,56 +220,80 @@ def clean_ascii(text):
 
 def main():
 
-    base_url, port, endpoint, params = ask_user_input()
+    # Selection: API or local file
+    print("Choose the data source:")
+    print("1. API URL")
+    print("2. Local JSON file")
+    choice = input("Your choice (1 or 2): ").strip()
 
-    # Eingaben bereinigen
-    base_url = clean_ascii(base_url)
-    port = clean_ascii(port)
-    endpoint = clean_ascii(endpoint)
-
-    # Protokoll ergänzen, falls nicht vorhanden
-    if not base_url.startswith("http://") and not base_url.startswith("https://"):
-        base_url = "http://" + base_url
-
-    full_url = f"{base_url}:{port}{endpoint}"
-
-    print(f"\n➡️  Sende Request an: {full_url}")
-    if params:
-        print(f"➡️  Mit Parametern: {params}")
-
-    # API Call
-    response = requests.get(full_url, params=params)
-
-    try:
-        data = response.json()
-    except json.JSONDecodeError:
+    if choice == "2":
+        # Load local file
+        file_path = input("Please enter the path to the JSON file: ").strip()
         try:
-            data = json.loads(response.text)
-            print("⚠️ Content-Type Header oder Format ist nicht korrekt, aber JSON konnte trotzdem geladen werden.")
-        except Exception as e:
-            print("❌ Die API antwortet nicht mit JSON!")
-            print("Raw Response:")
-            print(response.text)
+            with open(file_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            print(f"\n✅ JSON file successfully loaded: {file_path}")
+        except FileNotFoundError:
+            print(f"❌ File '{file_path}' not found!")
             return
+        except json.JSONDecodeError as e:
+            print(f"❌ Error parsing JSON file: {e}")
+            return
+        except Exception as e:
+            print(f"❌ Error loading file: {e}")
+            return
+    else:
+        # Use API
+        base_url, port, endpoint, params = ask_user_input()
+
+        # Clean inputs
+        base_url = clean_ascii(base_url)
+        port = clean_ascii(port)
+        endpoint = clean_ascii(endpoint)
+
+        # Add protocol if not present
+        if not base_url.startswith("http://") and not base_url.startswith("https://"):
+            base_url = "http://" + base_url
+
+        full_url = f"{base_url}:{port}{endpoint}"
+
+        print(f"\n➡️  Sending request to: {full_url}")
+        if params:
+            print(f"➡️  With parameters: {params}")
+
+        # API Call
+        response = requests.get(full_url, params=params)
+
+        try:
+            data = response.json()
+        except json.JSONDecodeError:
+            try:
+                data = json.loads(response.text)
+                print("⚠️ Content-Type header or format is incorrect, but JSON could still be loaded.")
+            except Exception as e:
+                print("❌ The API does not respond with JSON!")
+                print("Raw Response:")
+                print(response.text)
+                return
 
     print("\n📥 Original Response:")
     print(json.dumps(data, indent=2, ensure_ascii=False))
 
-    # Datentyp-Struktur erzeugen
+    # Generate data type structure
     type_structure = determine_types(data)
 
-    print("\n📦 Typstruktur der API-Response (JSON mit Typen):")
+    print("\n📦 Type structure of API response (JSON with types):")
     print(json.dumps(type_structure, indent=2, ensure_ascii=False))
 
-    # JSON-Schema automatisch generieren
+    # Automatically generate JSON schema
     schema = infer_full_json_schema(data)
     schema["$schema"] = "http://json-schema.org/draft-07/schema#"
     
-    print("\n📋 JSON-Schema (validierbar):")
+    print("\n📋 JSON Schema (validatable):")
     print(json.dumps(schema, indent=2, ensure_ascii=False))
 
-    # Schema speichern
-    save_schema = input("\nMöchtest du das JSON-Schema speichern? (y/n): ").strip().lower()
+    # Save schema
+    save_schema = input("\nDo you want to save the JSON schema? (y/n): ").strip().lower()
     if save_schema == "y":
         import os
         output_dir = "schemas"
@@ -139,34 +301,34 @@ def main():
         filename = os.path.join(output_dir, "auto_schema.json")
         with open(filename, "w", encoding="utf-8") as f:
             json.dump(schema, f, indent=2, ensure_ascii=False)
-        print(f"💾 JSON-Schema gespeichert als {filename}")
+        print(f"💾 JSON schema saved as {filename}")
 
-    # Validierung gegen JSON-Schema
-    validate = input("\nMöchtest du die Response gegen ein JSON-Schema validieren? (y/n): ").strip().lower()
+    # Validation against JSON schema
+    validate = input("\nDo you want to validate the response against a JSON schema? (y/n): ").strip().lower()
     if validate == "y":
         try:
             import jsonschema
         except ImportError:
-            print("❌ Das Paket 'jsonschema' ist nicht installiert. Bitte mit 'pip install jsonschema' nachinstallieren.")
+            print("❌ The 'jsonschema' package is not installed. Please install it with 'pip install jsonschema'.")
         else:
-            schema_file = input("Pfad zur Schema-Datei (z.B. oven_layout_schema.json): ").strip()
+            schema_file = input("Path to schema file (e.g. oven_layout_schema.json): ").strip()
             import os
             if not os.path.isfile(schema_file):
-                print(f"❌ Datei '{schema_file}' nicht gefunden!")
+                print(f"❌ File '{schema_file}' not found!")
             else:
                 with open(schema_file, "r", encoding="utf-8") as f:
                     schema = json.load(f)
                 try:
                     jsonschema.validate(instance=data, schema=schema)
-                    print("✅ Die API-Response ist gültig nach dem Schema!")
+                    print("✅ The API response is valid according to the schema!")
                 except jsonschema.ValidationError as ve:
-                    print("❌ Die API-Response ist NICHT gültig!")
-                    print(f"Fehler: {ve.message}")
+                    print("❌ The API response is NOT valid!")
+                    print(f"Error: {ve.message}")
                 except Exception as e:
-                    print(f"❌ Validierungsfehler: {e}")
+                    print(f"❌ Validation error: {e}")
 
-    # Optional in Datei speichern
-    save = input("\nMöchtest du die Typstruktur als JSON speichern? (y/n): ").strip().lower()
+    # Optional save to file
+    save = input("\nDo you want to save the type structure as JSON? (y/n): ").strip().lower()
     if save == "y":
         import os
         output_dir = "schemas"
@@ -174,7 +336,7 @@ def main():
         filename = os.path.join(output_dir, "api_type_structure.json")
         with open(filename, "w", encoding="utf-8") as f:
             json.dump(type_structure, f, indent=2, ensure_ascii=False)
-        print(f"💾 Gespeichert als {filename}")
+        print(f"💾 Saved as {filename}")
 
 
 if __name__ == "__main__":

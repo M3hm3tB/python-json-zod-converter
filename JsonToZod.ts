@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 interface JsonSchema {
-  type?: string;
+  type?: string | string[];  // Can also be an array like ["object", "null"]
   properties?: Record<string, JsonSchema>;
   items?: JsonSchema;
   required?: string[];
@@ -29,6 +29,19 @@ function toPascalCase(str: string): string {
     .split(/[_\s-]+/)
     .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
     .join('');
+}
+
+function isValidIdentifier(name: string): boolean {
+  // Checks if the name is a valid JavaScript identifier
+  return /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(name);
+}
+
+function formatPropertyName(name: string): string {
+  if (isValidIdentifier(name)) {
+    return name;
+  } else {
+    return JSON.stringify(name);
+  }
 }
 
 function generateSchemaName(pathStr: string): string {
@@ -71,13 +84,41 @@ function jsonSchemaToZod(
 ): string {
   const indent = '  '.repeat(depth);
 
-  // Prüfe ob dieses Schema als Sub-Schema extrahiert wurde
+  // Check if this schema was extracted as a sub-schema
   if (subSchemas) {
     const schemaStr = JSON.stringify(schema);
     for (const [key, subSchema] of subSchemas.entries()) {
       if (key === schemaStr) {
         return subSchema.name;
       }
+    }
+  }
+
+  // Handle multi-type arrays like ["object", "null"] or ["string", "null"]
+  if (Array.isArray(schema.type)) {
+    const types = schema.type;
+    const hasNull = types.includes('null');
+    const nonNullTypes = types.filter(t => t !== 'null');
+    
+    if (nonNullTypes.length === 1 && hasNull) {
+      // Single type + null -> use .nullable()
+      const baseSchema = { ...schema, type: nonNullTypes[0] };
+      const baseZod = jsonSchemaToZod(baseSchema, depth, subSchemas, fieldName);
+      return `${baseZod}.nullable()`;
+    } else if (nonNullTypes.length > 1) {
+      // Multiple types -> use z.union()
+      const unionTypes = nonNullTypes.map(t => {
+        const typeSchema = { ...schema, type: t };
+        return jsonSchemaToZod(typeSchema, depth, subSchemas, fieldName);
+      });
+      let result = `z.union([${unionTypes.join(', ')}])`;
+      if (hasNull) {
+        result += '.nullable()';
+      }
+      if (schema.description) {
+        result += `.describe(${JSON.stringify(schema.description)})`;
+      }
+      return result;
     }
   }
 
@@ -94,13 +135,18 @@ function jsonSchemaToZod(
     case 'string':
       let zodString = 'z.string()';
       
-      // UUID-Pattern speziell behandeln
+      // handle UUID-Pattern 
       if (schema.pattern && schema.pattern.includes('[0-9a-fA-F]{8}')) {
         zodString += '.uuid()';
       } else if (schema.pattern) {
         zodString += `.regex(/${schema.pattern}/)`;
-      } else if (fieldName && fieldName.toLowerCase() === 'uuid') {
-        // Automatisch UUID wenn Feldname "uuid" ist
+      } else if (fieldName && (
+        fieldName.toLowerCase() === 'uuid' ||
+        fieldName.toLowerCase().endsWith('_id') ||
+        fieldName.toLowerCase().includes('uuid') ||
+        fieldName.toLowerCase().includes('guid')
+      )) {
+        // Automatically use UUID if field name is "uuid" or ends with "_id" or contains "uuid"/"guid"
         zodString += '.uuid()';
       }
       
@@ -164,7 +210,7 @@ function jsonSchemaToZod(
             const zodType = jsonSchemaToZod(value, depth + 1, subSchemas, key);
             const isRequired = schema.required?.includes(key);
             const optional = isRequired ? '' : '.optional()';
-            return `${indent}  ${key}: ${zodType}${optional}`;
+            return `${indent}  ${formatPropertyName(key)}: ${zodType}${optional}`;
           })
           .join(',\n');
 
@@ -189,7 +235,7 @@ function jsonSchemaToZod(
 
 function generateZodSchema(jsonSchemaPath: string): void {
   if (!fs.existsSync(jsonSchemaPath)) {
-    console.error(`❌ Datei nicht gefunden: ${jsonSchemaPath}`);
+    console.error(`❌ File not found: ${jsonSchemaPath}`);
     process.exit(1);
   }
 
@@ -199,12 +245,12 @@ function generateZodSchema(jsonSchemaPath: string): void {
   const subSchemas = new Map<string, SubSchema>();
   findSubSchemas(jsonSchema, subSchemas);
 
-  // Sortiere Sub-Schemas nach Abhängigkeiten (kleinste zuerst)
+  // Sort sub-schemas by dependencies (smallest first)
   const sortedSubSchemas = Array.from(subSchemas.entries())
     .sort((a, b) => {
       const depthA = a[1].path.split('.').length;
       const depthB = b[1].path.split('.').length;
-      return depthB - depthA; // Tiefste zuerst
+      return depthB - depthA; // Deepest first
     });
 
   let subSchemaCode = '';
@@ -218,14 +264,14 @@ function generateZodSchema(jsonSchemaPath: string): void {
 
   const zodSchemaCode = jsonSchemaToZod(jsonSchema, 0, processedSchemas, undefined);
 
-  // Generiere Type-Exports für alle Sub-Schemas
+  // Generate type exports for all sub-schemas
   const typeExports = Array.from(processedSchemas.values())
     .map(s => `export type ${s.name.replace('Schema', '')} = z.infer<typeof ${s.name}>;`)
     .join('\n');
 
   const outputCode = `import { z } from 'zod';
 
-// Generiert aus: ${path.basename(jsonSchemaPath)}
+// Generated from: ${path.basename(jsonSchemaPath)}
 ${subSchemaCode}export const schema = ${zodSchemaCode};
 
 export type SchemaType = z.infer<typeof schema>;
@@ -237,13 +283,13 @@ ${typeExports ? '\n' + typeExports : ''}
   const outputPath = path.join(dir, `${basename}.zod.ts`);
 
   fs.writeFileSync(outputPath, outputCode, 'utf-8');
-  console.log(`✅ Zod-Schema gespeichert: ${outputPath}`);
+  console.log(`✅ Zod schema saved: ${outputPath}`);
 }
 
-// CLI-Argumente verarbeiten
+// Process CLI arguments
 const args = process.argv.slice(2);
 if (args.length === 0) {
-  console.error('❌ Verwendung: ts-node JsonToZod.ts <pfad-zum-json-schema>');
+  console.error('❌ Usage: ts-node JsonToZod.ts <path-to-json-schema>');
   process.exit(1);
 }
 
